@@ -12,6 +12,16 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netdb.h> 
+#include <sys/time.h>
+
+#define TIMEOUT		(1)	// 1 second
+#define TIMEOUT_0	(0)
+
+#define TIMEOUT_ON()	(setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, \
+							(char*)&timeout, sizeof(struct timeval)))
+
+#define TIMEOUT_OFF()	(setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, \
+							(char*)&timeout_0, sizeof(struct timeval)))
 
 #define BUFSIZE 1024
 
@@ -21,6 +31,13 @@ typedef struct request
 	char cmd[32];
 	char file[64];
 }Request_t;
+
+typedef struct msg_pkt
+{
+	int seq;
+	int nbytes;
+	char buffer[BUFSIZE];
+}msg_pkt_t;
 
 size_t file_size(int fd)
 {
@@ -48,10 +65,20 @@ int main(int argc, char **argv)
     char msg[100];
 
     int fd;
+    int pseq;
     int ls_flag = 0;
     size_t len;
     off_t offset;
     Request_t cmd_msg;
+    msg_pkt_t msgbuff;
+
+    struct timeval timeout;
+    timeout.tv_sec = TIMEOUT;
+    timeout.tv_usec = 0;
+
+    struct timeval timeout_0;
+    timeout_0.tv_sec = TIMEOUT_0;
+    timeout_0.tv_usec = 0;
 
     /* check command line arguments */
     if (argc != 3) {
@@ -140,7 +167,6 @@ int main(int argc, char **argv)
 
 	    printf("[Client] Echo from server: %s\n", buf);
 
-
 	label1:
 
 		/**** Case 1: GET File from server ****/
@@ -158,22 +184,41 @@ int main(int argc, char **argv)
 
 	    	char * buffer = (char *)malloc(len);
 
-	    	// printf("file size = %ld\n", len);
-
 	    	offset = 0;
+	    	pseq = 0;
+
 
 	    	while(offset < len)
 	    	{
-	    		n = recvfrom(sockfd, buffer + offset, BUFSIZE, 0, 
+	    		bzero((void *)&msgbuff, sizeof(msg_pkt_t));
+
+	    		n = recvfrom(sockfd, &msgbuff, sizeof(msg_pkt_t), 0, 
 							(struct sockaddr *)&serveraddr, &serverlen);
 	    		if (n < 0) 
 	    			error("ERROR in recvfrom");
 
-	    		// printf("Writing! %ld\n", offset);
+	    		if((msgbuff.seq - pseq) == 1)
+	    		{
+	    			
+	    			memcpy((void*)(buffer + offset),(void *)msgbuff.buffer, msgbuff.nbytes);
+	    			write(fd, buffer + offset, msgbuff.nbytes);
+	    			offset += msgbuff.nbytes;
 
-	    		write(fd, buffer + offset, n);
+	    			strcpy(msgbuff.buffer, "ACK");
+	    			
+	    			//send ACK
+	    			n = sendto(sockfd, &msgbuff, sizeof(msg_pkt_t), 0,
+	    			 			(struct sockaddr *)&serveraddr, serverlen);
+	    			if (n < 0) 
+						error("ERROR in sendto");
 
-	    		offset += n;
+					pseq++;
+	    			continue;
+	    		}
+	    		else
+	    		{
+	    			continue;
+	    		}
 
 	    	}
 
@@ -212,6 +257,9 @@ int main(int argc, char **argv)
             /* send the file in packet size of 1024 bytes */
             lseek(fd, 0, SEEK_SET);
             offset = 0;
+            pseq = 0;
+
+            TIMEOUT_ON();
 
             while (offset < len)
             {
@@ -224,14 +272,40 @@ int main(int argc, char **argv)
                     error("Read Unsuccessful\n");
                 }
 
-                n = sendto(sockfd, (void *)(buffer + offset), readnow, 0,
+                /* Form the packet to transfer */
+                pseq++;            
+                bzero((void *)&msgbuff, sizeof(msg_pkt_t));
+                msgbuff.seq = pseq;
+                msgbuff.nbytes = readnow;
+                memcpy((void *)msgbuff.buffer, (void*)(buffer + offset), readnow);
+
+                label_rep1:
+
+                n = sendto(sockfd, (void *)&msgbuff, sizeof(msg_pkt_t), 0,
                             (struct sockaddr *)&serveraddr, serverlen);
 
                 if (n < 0) 
                     error("ERROR in sendto");
 
-                offset += n;
+                /* Wait for ACK */
+                bzero((void *)&msgbuff, sizeof(msg_pkt_t));
+                n = recvfrom(sockfd, &msgbuff, sizeof(msg_pkt_t), 0,
+             				(struct sockaddr *)&serveraddr, &serverlen);
+
+                if(n >= 0 && (msgbuff.seq == pseq) && 
+        					((strcmp(msgbuff.buffer, "ACK")) == 0))
+        		{
+        			offset += msgbuff.nbytes;
+        			continue;
+        		}
+        		else
+        		{
+        			goto label_rep1;
+        		}
+
             }
+
+            TIMEOUT_OFF();
             free(buffer);
             close(fd);
 
@@ -278,8 +352,15 @@ int main(int argc, char **argv)
             system(buf);
     	}
 
+    	/* Test case */
+    	else if((strcmp(cmd_msg.cmd, "test")) == 0)
+    	{
+    		// nothing 
+    		while(1);
+    	}
+
     	else
-    		printf("Def:\n"); 
+    		printf("[Client] Command: %s undefined!\n", cmd_msg.cmd);
 
 
 	    close(sockfd);

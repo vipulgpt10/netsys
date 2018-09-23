@@ -15,6 +15,16 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <dirent.h>  //directory
+#include <sys/time.h>
+
+#define TIMEOUT		(1)	// 1 second
+#define TIMEOUT_0	(0)
+
+#define TIMEOUT_ON()	(setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, \
+							(char*)&timeout, sizeof(struct timeval)))
+
+#define TIMEOUT_OFF()	(setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, \
+							(char*)&timeout_0, sizeof(struct timeval)))
 
 #define BUFSIZE 1024
 
@@ -23,6 +33,13 @@ typedef struct request
     char cmd[32];
     char file[64];
 }Request_t;
+
+typedef struct msg_pkt
+{
+	int seq;
+	int nbytes;
+	char buffer[BUFSIZE];
+}msg_pkt_t;
 
 
 size_t file_size(int fd)
@@ -54,10 +71,21 @@ int main(int argc, char **argv)
     int n; /* message byte size */
 
     int fd;
+    int pseq;
     size_t len;
     int ls_flag = 0;
     off_t offset;
     Request_t cmd_msg;
+    msg_pkt_t msgbuff;
+
+    struct timeval timeout;
+    timeout.tv_sec = TIMEOUT;
+    timeout.tv_usec = 0;
+
+    struct timeval timeout_0;
+    timeout_0.tv_sec = TIMEOUT_0;
+    timeout_0.tv_usec = 0;
+
 
     /* 
     * check command line arguments 
@@ -83,6 +111,8 @@ int main(int argc, char **argv)
     optval = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, 
                 (const void *)&optval , sizeof(int));
+
+	TIMEOUT_OFF();
 
     /*
     * build the server's Internet address
@@ -142,7 +172,7 @@ int main(int argc, char **argv)
 
         /**** Case 1: GET File from server ****/
         if((strcmp(cmd_msg.cmd, "get")) == 0)
-        {
+        { 
             fd = open(cmd_msg.file, O_RDONLY);    
             
             if (fd == -1)
@@ -160,6 +190,9 @@ int main(int argc, char **argv)
             /* send the file in packet size of 1024 bytes */
             lseek(fd, 0, SEEK_SET);
             offset = 0;
+            pseq = 0;
+
+            TIMEOUT_ON();
 
             while (offset < len)
             {
@@ -172,14 +205,40 @@ int main(int argc, char **argv)
                     error("Read Unsuccessful\n");
                 }
 
-                n = sendto(sockfd, (void *)(buffer + offset), readnow, 0,
-                            (struct sockaddr *) &clientaddr, clientlen);
+                /* Form the packet to transfer */
+                pseq++;            
+                bzero((void *)&msgbuff, sizeof(msg_pkt_t));
+                msgbuff.seq = pseq;
+                msgbuff.nbytes = readnow;
+                memcpy((void *)msgbuff.buffer, (void*)(buffer + offset), readnow);
+
+            	label_rep1:
+
+                n = sendto(sockfd, (void *)&msgbuff, sizeof(msg_pkt_t), 0,
+                			(struct sockaddr *) &clientaddr, clientlen);
 
                 if (n < 0) 
                     error("ERROR in sendto");
 
-                offset += n;
+                /* Wait for ACK */
+                bzero((void *)&msgbuff, sizeof(msg_pkt_t));
+        		n = recvfrom(sockfd, &msgbuff, sizeof(msg_pkt_t), 0,
+             				(struct sockaddr *) &clientaddr, &clientlen);
+
+        		if(n >= 0 && (msgbuff.seq == pseq) && 
+        					((strcmp(msgbuff.buffer, "ACK")) == 0))
+        		{
+        			offset += msgbuff.nbytes;
+        			continue;
+        		}
+        		else
+        		{
+        			goto label_rep1;
+        		}
+
             }
+
+            TIMEOUT_OFF();
             free(buffer);
             close(fd);
 
@@ -204,22 +263,41 @@ int main(int argc, char **argv)
 
 	    	char * buffer = (char *)malloc(len);
 
-	    	// printf("file size = %ld\n", len);
-
 	    	offset = 0;
+	    	pseq = 0;
 
 	    	while(offset < len)
 	    	{
-	    		n = recvfrom(sockfd, buffer + offset, BUFSIZE, 0, 
+	    		bzero((void *)&msgbuff, sizeof(msg_pkt_t));
+
+	    		n = recvfrom(sockfd, &msgbuff, sizeof(msg_pkt_t), 0, 
 	    					(struct sockaddr *) &clientaddr, &clientlen);
 	    		if (n < 0) 
 	    			error("ERROR in recvfrom");
 
-	    		// printf("Writing! %ld\n", offset);
+	    		if((msgbuff.seq - pseq) == 1)
+	    		{
+	    			
+	    			memcpy((void*)(buffer + offset),(void *)msgbuff.buffer, msgbuff.nbytes);
+	    			write(fd, buffer + offset, msgbuff.nbytes);
+	    			offset += msgbuff.nbytes;
 
-	    		write(fd, buffer + offset, n);
+	    			strcpy(msgbuff.buffer, "ACK");
+	    			
+	    			//send ACK
+	    			n = sendto(sockfd, (void *)&msgbuff, sizeof(msg_pkt_t), 0,
+                			(struct sockaddr *) &clientaddr, clientlen);
 
-	    		offset += n;
+	    			if (n < 0) 
+						error("ERROR in sendto");
+
+					pseq++;
+	    			continue;
+	    		}
+	    		else
+	    		{
+	    			continue;
+	    		}
 
 	    	}
 
@@ -272,8 +350,34 @@ int main(int argc, char **argv)
             system(buf);
     	}
 
+    	/**** Case 7: Test ****/ 
+    	else if((strcmp(cmd_msg.cmd, "test")) == 0)
+    	{
+    		
+    		printf("Test case\n");
+    		TIMEOUT_ON();
+
+    		/* Receive UDP message */
+			n = recvfrom(sockfd, &buf, BUFSIZE, 0,
+             			(struct sockaddr *) &clientaddr, &clientlen);
+        	// if (n < 0)
+         //    	error("ERROR in recvfrom");
+			printf("Test case\n");
+
+			if (n >= 0) 
+			{
+    			//Message Received
+			}
+			else
+			{
+    			printf("Timed Out\n");
+			}
+
+			TIMEOUT_OFF();
+    	}
+
         else
-            printf("Def:\n");
+            printf("[Server] Command: %s undefined!\n", cmd_msg.cmd);
 
         continue;
 
