@@ -99,6 +99,8 @@ int main(int argc, char **argv)
     if (bind(sockfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) < 0) 
         error("ERROR on binding");
 
+    printf("[Server] Server runnning...\n");
+
     /* 
     * main loop: wait for a datagram, then echo it
     */
@@ -109,14 +111,15 @@ int main(int argc, char **argv)
 
         ls_flag = 0;
         bzero(buf, BUFSIZE);
+        printf("\n");
 
         /* receive cmd msg from host */
         n = recvfrom(sockfd, &cmd_msg, sizeof(Request_t), 0,
-             (struct sockaddr *) &clientaddr, &clientlen);
+             		(struct sockaddr *) &clientaddr, &clientlen);
         if (n < 0)
             error("ERROR in recvfrom");
 
-        printf("CMD: %s, File: %s\n", cmd_msg.cmd, cmd_msg.file);
+        printf("[Server] CMD: %s, File: %s\n", cmd_msg.cmd, cmd_msg.file);
 
         /* get host address */
         hostp = gethostbyaddr((const char *)&clientaddr.sin_addr.s_addr, 
@@ -126,8 +129,8 @@ int main(int argc, char **argv)
         hostaddrp = inet_ntoa(clientaddr.sin_addr);
         if (hostaddrp == NULL)
             error("ERROR on inet_ntoa\n");
-        printf("server received datagram from %s (%s)\n", 
-           hostp->h_name, hostaddrp);
+        // printf("server received datagram from %s (%s)\n", 
+        //    hostp->h_name, hostaddrp);
 
         /* ACK to host */
         n = sendto(sockfd, "OK", 3, 0, 
@@ -182,21 +185,65 @@ int main(int argc, char **argv)
 
             if(ls_flag == 1)
                 system("rm -rf file_list.txt");
+            else
+            	printf("[Server] File transferred\n");
         }
 
-        /* PUT File into server */
+        /**** Case 2: PUT File into server ****/
         else if((strcmp(cmd_msg.cmd, "put")) == 0)
         {
-            printf("put\n");
+            fd = open(cmd_msg.file, O_CREAT | O_RDWR, S_IRWXU);
+
+    		if (fd == -1)
+            	error("Error opening file\n");
+			
+			n = recvfrom(sockfd, (void *)&len, sizeof(size_t), 0, 
+						(struct sockaddr *) &clientaddr, &clientlen);
+	    	if (n < 0) 
+	    		error("ERROR in recvfrom");
+
+	    	char * buffer = (char *)malloc(len);
+
+	    	// printf("file size = %ld\n", len);
+
+	    	offset = 0;
+
+	    	while(offset < len)
+	    	{
+	    		n = recvfrom(sockfd, buffer + offset, BUFSIZE, 0, 
+	    					(struct sockaddr *) &clientaddr, &clientlen);
+	    		if (n < 0) 
+	    			error("ERROR in recvfrom");
+
+	    		// printf("Writing! %ld\n", offset);
+
+	    		write(fd, buffer + offset, n);
+
+	    		offset += n;
+
+	    	}
+
+	    	close(fd);
+	    	free(buffer);
+
+	    	printf("[Server] File transferred\n");
         }
+
+        /**** Case 3: DELETE File from server ****/
         else if((strcmp(cmd_msg.cmd, "delete")) == 0)
         {
-            printf("delete\n");
+            bzero(buf, BUFSIZE);
+            sprintf(buf, "rm -f %s", cmd_msg.file);
+            printf("[Server] Deleting file %s\n", cmd_msg.file);
+
+            system(buf);
         }
 
         /**** Case 4: LIST Files from server ****/
         else if((strcmp(cmd_msg.cmd, "ls")) == 0)
         {
+            printf("[Server] Sending file list\n");
+
             system("ls -la >> file_list.txt");
 
             strcpy(cmd_msg.cmd, "get");
@@ -206,11 +253,25 @@ int main(int argc, char **argv)
             goto label1;
 
             
-        }   
+        } 
+
+        /**** Case 5: Exit the server ****/  
         else if((strcmp(cmd_msg.cmd, "exit")) == 0)
         {
-            printf("exit\n");
+            printf("[Server] Closing server...\n");
+            break;
         }
+
+        /**** Case 6: MD5SUM of file from the server ****/ 
+    	else if((strcmp(cmd_msg.cmd, "md5sum")) == 0)
+    	{
+    		bzero(buf, BUFSIZE);
+            sprintf(buf, "md5sum %s", cmd_msg.file);
+            printf("[Server] MD5SUM of file %s on server:\n\n", cmd_msg.file);
+
+            system(buf);
+    	}
+
         else
             printf("Def:\n");
 
@@ -249,5 +310,7 @@ int main(int argc, char **argv)
             error("ERROR in sendto");
     }
 
+    close(sockfd);
+    return 0;
 
 }

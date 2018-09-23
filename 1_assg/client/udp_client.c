@@ -92,12 +92,13 @@ int main(int argc, char **argv)
 		printf("\tget  <filename>\n");
 		printf("\tput  <filename>\n");
 		printf("\tdelete  <filename>\n");
+		printf("\tmd5sum  <filename>\n");
 		printf("\tls \n");
 		printf("\texit \n");
 
 		printf(" \n");
 
-		printf(" Enter the command: ");
+		printf("[Client] Enter the command: ");
 
 
 	    fgets(msg, 100, stdin);
@@ -137,7 +138,7 @@ int main(int argc, char **argv)
 	    if (n < 0 || ((strcmp(buf, "OK")) != 0)) 
 			error("ERROR in recvfrom");
 
-	    printf("Echo from server: %s\n", buf);
+	    printf("[Client] Echo from server: %s\n", buf);
 
 
 	label1:
@@ -187,16 +188,61 @@ int main(int argc, char **argv)
 	    		printf("** file_list.txt temp file for ls...deleted after use!\n");
 
 	    	}
+	    	else
+	    		printf("[Client] File downloaded\n");
     	}
 
-    	/* PUT File into server */
+    	/**** Case 2: PUT File into server ****/
     	else if((strcmp(cmd_msg.cmd, "put")) == 0)
     	{
-    		printf("put\n");
+    		fd = open(cmd_msg.file, O_RDONLY);    
+            
+            if (fd == -1)
+                error("Error opening file\n");
+
+            /* send file size */
+            len = file_size(fd);
+            char * buffer = (char *)malloc(len);
+
+            n = sendto(sockfd, (void *)&len, sizeof(size_t), 0,
+                        (struct sockaddr *)&serveraddr, serverlen);
+            if (n < 0) 
+                error("ERROR in sendto");
+
+            /* send the file in packet size of 1024 bytes */
+            lseek(fd, 0, SEEK_SET);
+            offset = 0;
+
+            while (offset < len)
+            {
+                size_t readnow;
+                readnow = read(fd, buffer + offset, BUFSIZE);
+
+                if (readnow < 0)
+                {
+                    close (fd);
+                    error("Read Unsuccessful\n");
+                }
+
+                n = sendto(sockfd, (void *)(buffer + offset), readnow, 0,
+                            (struct sockaddr *)&serveraddr, serverlen);
+
+                if (n < 0) 
+                    error("ERROR in sendto");
+
+                offset += n;
+            }
+            free(buffer);
+            close(fd);
+
+            printf("[Client] File transferred\n");
+
     	}
+
+    	/**** Case 3: DELETE File from server ****/
     	else if((strcmp(cmd_msg.cmd, "delete")) == 0)
     	{
-    		printf("delete\n");
+    		printf("[Client] File %s deleted\n", cmd_msg.file);
     	}
 
     	/**** Case 4: LIST Files from server ****/
@@ -204,7 +250,7 @@ int main(int argc, char **argv)
     	{
     		
     		printf("\n=======================================================================\n");
-    		printf("List of Files on Server:    cmd(ls -la)\n");
+    		printf("[Client] List of Files on Server:    cmd(ls -la)\n");
 
     		strcpy(cmd_msg.cmd, "get");
             strcpy(cmd_msg.file, "file_list.txt"); 
@@ -213,14 +259,27 @@ int main(int argc, char **argv)
             goto label1;    		
 
     	}
+
+    	/**** Case 5: Exit the server ****/ 
     	else if((strcmp(cmd_msg.cmd, "exit")) == 0)
     	{
-    		printf("exit\n");
+    		printf("[Client] Server closed!\n");
+    		printf("[Client] Shuting down client...\n");
+    		break;
     	}
-    	else
-    		printf("Def:\n");
 
-    	// memset(out_buff, 0, sizeof(out_buff));    
+    	/**** Case 6: MD5SUM of file from the server ****/ 
+    	else if((strcmp(cmd_msg.cmd, "md5sum")) == 0)
+    	{
+    		bzero(buf, BUFSIZE);
+            sprintf(buf, "md5sum %s", cmd_msg.file);
+            printf("[Client] MD5SUM of file %s on client:\n\n", cmd_msg.file);
+
+            system(buf);
+    	}
+
+    	else
+    		printf("Def:\n"); 
 
 
 	    close(sockfd);
@@ -242,6 +301,6 @@ int main(int argc, char **argv)
 	    // close(sockfd);    	
     }
 
-
+    close(sockfd);
     return 0;
 }
