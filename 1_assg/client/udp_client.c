@@ -14,24 +14,27 @@
 #include <netdb.h> 
 #include <sys/time.h>
 
-#define TIMEOUT		(1)	// 1 second
+#define TIMEOUT		(200000)   // 200 msec = 200,000 usec
 #define TIMEOUT_0	(0)
 
+/* Turn on timeout for recvfrom()*/
 #define TIMEOUT_ON()	(setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, \
 							(char*)&timeout, sizeof(struct timeval)))
 
+/* Turn off timeout for recvfrom()*/
 #define TIMEOUT_OFF()	(setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, \
 							(char*)&timeout_0, sizeof(struct timeval)))
 
 #define BUFSIZE 1024
 
-
+/* structure for storing command and filename */
 typedef struct request
 {
 	char cmd[32];
 	char file[64];
 }Request_t;
 
+/* Structure for message packet: sequence number, no of bytes, buffer. */
 typedef struct msg_pkt
 {
 	int seq;
@@ -72,13 +75,14 @@ int main(int argc, char **argv)
     Request_t cmd_msg;
     msg_pkt_t msgbuff;
 
+    /* Timer structure for timeout */
     struct timeval timeout;
-    timeout.tv_sec = TIMEOUT;
-    timeout.tv_usec = 0;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = TIMEOUT;
 
     struct timeval timeout_0;
-    timeout_0.tv_sec = TIMEOUT_0;
-    timeout_0.tv_usec = 0;
+    timeout_0.tv_sec = 0;
+    timeout_0.tv_usec = TIMEOUT;
 
     /* check command line arguments */
     if (argc != 3) {
@@ -114,7 +118,7 @@ int main(int argc, char **argv)
 	    serverlen = sizeof(serveraddr);
 
 	    
-	    /* available APIs to users */
+	    /* Display available APIs to users */
 	    printf("\n[Client] List of commands available:\n");
 		printf("\tget  <filename>\n");
 		printf("\tput  <filename>\n");
@@ -123,6 +127,7 @@ int main(int argc, char **argv)
 		printf("\tls \n");
 		printf("\texit \n");
 
+        printf("\n**Please don't use undefined filenames.\n");
 		printf(" \n");
 
 		printf("[Client] Enter the command: ");
@@ -155,7 +160,8 @@ int main(int argc, char **argv)
 
 	    bzero(buf, BUFSIZE);
 
-	    n = sendto(sockfd, (void *)&cmd_msg, sizeof(Request_t), 0,
+	    /* Send the command and file name */
+        n = sendto(sockfd, (void *)&cmd_msg, sizeof(Request_t), 0,
 	    			 (struct sockaddr *)&serveraddr, serverlen);
 	    if (n < 0) 
 			error("ERROR in sendto");
@@ -172,36 +178,42 @@ int main(int argc, char **argv)
 		/**** Case 1: GET File from server ****/
 		if((strcmp(cmd_msg.cmd, "get")) == 0)
 		{
-    		fd = open(cmd_msg.file, O_CREAT | O_RDWR, S_IRWXU);
+    		/* Create a new file and write the contents in chunck of 1024 bytes */
+            fd = open(cmd_msg.file, O_CREAT | O_RDWR, S_IRWXU);
 
     		if (fd == -1)
             	error("Error opening file\n");
 			
+            /* Receive file size */
 			n = recvfrom(sockfd, (void *)&len, sizeof(size_t), 0, 
 						(struct sockaddr *)&serveraddr, &serverlen);
 	    	if (n < 0) 
 	    		error("ERROR in recvfrom");
+
+            printf("Downloading...\n");
 
 	    	char * buffer = (char *)malloc(len);
 
 	    	offset = 0;
 	    	pseq = 0;
 
-
 	    	while(offset < len)
 	    	{
 	    		bzero((void *)&msgbuff, sizeof(msg_pkt_t));
 
+                /* Reaceive new message packet */
 	    		n = recvfrom(sockfd, &msgbuff, sizeof(msg_pkt_t), 0, 
 							(struct sockaddr *)&serveraddr, &serverlen);
 	    		if (n < 0) 
 	    			error("ERROR in recvfrom");
 
+                /* Check for next sequence number/packet or else repeat*/
 	    		if((msgbuff.seq - pseq) == 1)
 	    		{
 	    			
 	    			memcpy((void*)(buffer + offset),(void *)msgbuff.buffer, msgbuff.nbytes);
-	    			write(fd, buffer + offset, msgbuff.nbytes);
+	    			/* write the contents to the file */
+                    write(fd, buffer + offset, msgbuff.nbytes);
 	    			offset += msgbuff.nbytes;
 
 	    			strcpy(msgbuff.buffer, "ACK");
@@ -240,7 +252,8 @@ int main(int argc, char **argv)
     	/**** Case 2: PUT File into server ****/
     	else if((strcmp(cmd_msg.cmd, "put")) == 0)
     	{
-    		fd = open(cmd_msg.file, O_RDONLY);    
+    		/* Read the file in chunck of 1024 bytes and transfer it */
+            fd = open(cmd_msg.file, O_RDONLY);    
             
             if (fd == -1)
                 error("Error opening file\n");
@@ -249,16 +262,26 @@ int main(int argc, char **argv)
             len = file_size(fd);
             char * buffer = (char *)malloc(len);
 
+            printf("Uploading...\n");
+
+            /* Send filesize */
             n = sendto(sockfd, (void *)&len, sizeof(size_t), 0,
                         (struct sockaddr *)&serveraddr, serverlen);
+
             if (n < 0) 
                 error("ERROR in sendto");
 
+            n = recvfrom(sockfd, buf, 3, 0, 
+                    (struct sockaddr *)&serveraddr, &serverlen);
+            if (n < 0 || ((strcmp(buf, "OK")) != 0)) 
+                error("ERROR in recvfrom");
+         
             /* send the file in packet size of 1024 bytes */
             lseek(fd, 0, SEEK_SET);
             offset = 0;
             pseq = 0;
 
+            /* Turn timeout on for recvfrom() */
             TIMEOUT_ON();
 
             while (offset < len)
@@ -281,6 +304,7 @@ int main(int argc, char **argv)
 
                 label_rep1:
 
+                /* Send the packet */
                 n = sendto(sockfd, (void *)&msgbuff, sizeof(msg_pkt_t), 0,
                             (struct sockaddr *)&serveraddr, serverlen);
 
@@ -292,6 +316,7 @@ int main(int argc, char **argv)
                 n = recvfrom(sockfd, &msgbuff, sizeof(msg_pkt_t), 0,
              				(struct sockaddr *)&serveraddr, &serverlen);
 
+                /* If timeout then repeat at label label_rep1 */
                 if(n >= 0 && (msgbuff.seq == pseq) && 
         					((strcmp(msgbuff.buffer, "ACK")) == 0))
         		{
@@ -352,34 +377,13 @@ int main(int argc, char **argv)
             system(buf);
     	}
 
-    	/* Test case */
-    	else if((strcmp(cmd_msg.cmd, "test")) == 0)
-    	{
-    		// nothing 
-    		while(1);
-    	}
-
     	else
     		printf("[Client] Command: %s undefined!\n", cmd_msg.cmd);
 
 
 	    close(sockfd);
 	    continue;
-
-
-	    
-	    // n = sendto(sockfd, buf, strlen(buf), 0, &serveraddr, serverlen);
-	    // if (n < 0) 
-	    //   error("ERROR in sendto");
-	    
-	    // /* print the server's reply */
-	    // n = recvfrom(sockfd, buf, strlen(buf), 0, &serveraddr, &serverlen);
-	    // if (n < 0) 
-	    //   error("ERROR in recvfrom");
-	    // printf("Echo from server: %s", buf);
-
-
-	    // close(sockfd);    	
+   	
     }
 
     close(sockfd);
