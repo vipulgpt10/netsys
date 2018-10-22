@@ -14,7 +14,7 @@
 #include <netdb.h> 
 #include <sys/time.h>
 
-#define TIMEOUT		(200000)   // 200 msec = 200,000 usec
+#define TIMEOUT		(900000)   // 200 msec = 200,000 usec
 #define TIMEOUT_0	(0)
 
 /* Turn on timeout for recvfrom()*/
@@ -77,8 +77,8 @@ int main(int argc, char **argv)
 
     /* Timer structure for timeout */
     struct timeval timeout;
-    timeout.tv_sec = 0;
-    timeout.tv_usec = TIMEOUT;
+    timeout.tv_sec = 4;
+    timeout.tv_usec = 0;//TIMEOUT;
 
     struct timeval timeout_0;
     timeout_0.tv_sec = 0;
@@ -295,6 +295,8 @@ int main(int argc, char **argv)
                     error("Read Unsuccessful\n");
                 }
 
+                
+
                 /* Form the packet to transfer */
                 pseq++;            
                 bzero((void *)&msgbuff, sizeof(msg_pkt_t));
@@ -311,8 +313,10 @@ int main(int argc, char **argv)
                 if (n < 0) 
                     error("ERROR in sendto");
 
+                printf("Filesize: %ld\n", offset);
+
                 /* Wait for ACK */
-                bzero((void *)&msgbuff, sizeof(msg_pkt_t));
+                // bzero((void *)&msgbuff, sizeof(msg_pkt_t));
                 n = recvfrom(sockfd, &msgbuff, sizeof(msg_pkt_t), 0,
              				(struct sockaddr *)&serveraddr, &serverlen);
 

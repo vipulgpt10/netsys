@@ -17,7 +17,7 @@
 #include <dirent.h>  //directory
 #include <sys/time.h>
 
-#define TIMEOUT		(200000)	// 200 msec = 200,000 usec
+#define TIMEOUT		(900000)	// 200 msec = 200,000 usec
 #define TIMEOUT_0	(0)
 
 /* Turn on timeout for recvfrom()*/
@@ -286,12 +286,14 @@ int main(int argc, char **argv)
 	    	while(offset < len)
 	    	{
 
-                bzero((void *)&msgbuff, sizeof(msg_pkt_t));
+                // bzero((void *)&msgbuff, sizeof(msg_pkt_t));
 	    		/* Reaceive new message packet */
                 n = recvfrom(sockfd, &msgbuff, sizeof(msg_pkt_t), 0, 
 	    					(struct sockaddr *) &clientaddr, &clientlen);
 	    		if (n < 0) 
 	    			error("ERROR in recvfrom");
+
+                printf("Seq no: %d, msg_seq: %d\n", pseq, msgbuff.seq);
 
 	    		/* Check for next sequence number/packet or else repeat*/
                 if((msgbuff.seq - pseq) == 1)
@@ -313,6 +315,20 @@ int main(int argc, char **argv)
 					pseq++;
 	    			continue;
 	    		}
+                else if((msgbuff.seq - pseq) == 0 || (pseq > msgbuff.seq))
+                {
+                    strcpy(msgbuff.buffer, "ACK");
+
+                    n = sendto(sockfd, (void *)&msgbuff, sizeof(msg_pkt_t), 0,
+                            (struct sockaddr *) &clientaddr, clientlen);
+
+                    if (n < 0) 
+                        error("ERROR in sendto");
+
+                    pseq = msgbuff.seq + 1;
+                    
+                    continue;
+                }
 	    		else
 	    		{
 	    			continue;
