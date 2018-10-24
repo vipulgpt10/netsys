@@ -19,11 +19,14 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <errno.h>
 
 #define MAXLINE 4096            /*max text line length*/
 #define LISTENQ 16              /*maximum number of client connections*/
 #define DOC_ROOT    "/www"      /* document dir name */
 
+int connfd;
 
 /* Get file size from file descriptor */
 size_t file_size(int fd)
@@ -50,10 +53,22 @@ void error(char *msg)
     exit(1);
 }
 
+void signal_handler(int arg)
+{
+    
+
+    if(arg == SIGINT)
+    {
+    	close(connfd);
+    	printf("Closing socket\n");
+    	exit(1);
+    }
+}
+
 int main (int argc, char **argv)
 {
     
-    int listenfd, connfd; /* socket */
+    int listenfd; /* socket */
     int portno; /* port to listen on */
     struct sockaddr_in servaddr; /* server's addr */
     struct sockaddr_in clientaddr; /* client addr */
@@ -88,6 +103,8 @@ int main (int argc, char **argv)
 
     strcat(pwd, DOC_ROOT);
     printf("Current working dir: %s\n", pwd);
+
+    signal(SIGINT, signal_handler);
 
     /* socket: create the parent socket */
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
